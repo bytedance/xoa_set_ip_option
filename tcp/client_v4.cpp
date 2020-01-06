@@ -16,6 +16,8 @@
 #include <pthread.h>
 
 #include "util.h"
+#include "ip_opt.h"
+#include "tcp_opt_test.h"
 
 const int max_conn = 1000;
 int sock_fds[max_conn];
@@ -54,11 +56,26 @@ void* worker(void* arg)
 }
 
 
+void set_toa_option(int fd, int len)
+{
+    const int buf_size = 40;
+    unsigned char buf[buf_size] = {0x1f, 0x8};
+
+    for (int i = 2; i < len; i++)
+        buf[i] = i - 1;
+
+    if  (setsockopt(fd, IPPROTO_IP, IP_OPTIONS, buf, len) == 0)
+    {
+        printf("set option success, len: %d\n", len);
+    }
+}
+
+
 
 int main(int argc, char** argv)
 {
     if  (!(argc > 2))  
-    {   printf("usage: %s <dst ip> <dst ip> [<connections> [<requests> [<buf_size>]]]\n", argv[0]);
+    {   printf("usage: %s <dst ip> <dst port> [<connections> [<requests> [<buf_size>]]]\n", argv[0]);
         return 0;
     }
 
@@ -84,15 +101,33 @@ int main(int argc, char** argv)
 
     for (int i = 0; i < conn_num; i++)
     {
-        if  ((sock_fds[i] = socket(AF_INET, SOCK_STREAM, 0)) == -1)  perror("socket error");
+        if  ((sock_fds[i] = socket(AF_INET, SOCK_STREAM, 0)) == -1)  perror("socket error"); 
+        
+        {
+            struct sockaddr_in6 saddr;
+            struct sockaddr_in6 daddr;
+            generate_tcp_opt_v6((struct sockaddr*)&saddr, (struct sockaddr*)&daddr);
+
+            if  (set_ip_opt(sock_fds[i], AF_INET, (struct sockaddr*)&saddr, (struct sockaddr*)&daddr) == 0)
+                printf("set_ip_opt success\n");
+            else
+                printf("set_ip_opt failed\n");
+        }
         
 
         if  (connect(sock_fds[i], (struct sockaddr*)&that_addr, sizeof(struct sockaddr)) == -1)  perror("connect error");
         printf("establish connection %d to %s:%d\n", sock_fds[i], 
                 inet_ntoa(that_addr.sin_addr), ntohs(that_addr.sin_port));
+        
+        // this is not reliable, though it work because the kernel timer send a packet asynchronously. 
+        // for reliability, program should wait for an RTT and then disable the ip option.
+        if  (del_ip_opt(sock_fds[i], AF_INET) == 0)
+            printf("del_ip_opt success\n");
+        else
+            printf("del_ip_opt failed\n");
 
         if  (pthread_create(&sock_threads[i], NULL, worker, &sock_fds[i]) == -1)  perror("pthread_create error");
-    
+
     }
 
     for (int i = 0; i < conn_num; i++)
